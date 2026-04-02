@@ -1,7 +1,7 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from flask import Flask, request, jsonify
-import os, requests, json, zipfile
+import os, requests, json
 
 # === CONFIG ===
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -11,32 +11,8 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = Flask(__name__)
 
-# === DOWNLOAD MODEL ===
-if not os.path.exists("model"):
-    url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
-    r = requests.get(url)
-
-    with open("model.zip", "wb") as f:
-        f.write(r.content)
-
-    import zipfile
-    with zipfile.ZipFile("model.zip", 'r') as zip_ref:
-        zip_ref.extractall()
-
-    for name in os.listdir():
-        if name.startswith("vosk-model"):
-            os.rename(name, "model")
-
-# === VOSK ===
-from vosk import Model, KaldiRecognizer
-import wave
-import json as js
-from pydub import AudioSegment
-
-model = Model("model")
-
 # === STORAGE ===
-FILES = ["memory", "profile", "goals", "thoughts"]
+FILES = ["memory", "profile", "goals"]
 
 def load(name):
     return json.load(open(f"{name}.json")) if os.path.exists(f"{name}.json") else {}
@@ -48,33 +24,16 @@ data = {k: load(k) for k in FILES}
 
 SYSTEM = {
     "role": "system",
-    "content": "Ты умный ассистент как ChatGPT"
+    "content": "Ты умный ассистент как ChatGPT. Отвечай понятно, без лишнего."
 }
 
-def get_context(uid):
-    return f"""
-Профиль: {data['profile'].get(uid, [])[:3]}
-Цели: {data['goals'].get(uid, [])[:3]}
-"""
-
-def get_relevant(uid, text):
-    thoughts = data["thoughts"].get(uid, [])
-    return [t for t in thoughts if any(w in t for w in text.split())][:3]
-
-# === AI FUNCTION (ОБЩАЯ) ===
+# === AI ===
 def ask_ai(uid, text):
     data.setdefault("memory", {}).setdefault(uid, [])
 
-    relevant = get_relevant(uid, text)
-
-    messages = [
-        SYSTEM,
-        {"role": "system", "content": get_context(uid)}
+    messages = [SYSTEM] + data["memory"][uid][-6:] + [
+        {"role": "user", "content": text}
     ]
-
-    messages += data["memory"][uid][-6:]
-
-    messages.append({"role": "user", "content": text})
 
     r = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -95,6 +54,17 @@ def ask_ai(uid, text):
 
     return reply
 
+# === VOICE (СТАБИЛЬНО через API) ===
+def transcribe_voice(file_bytes):
+    r = requests.post(
+        "https://openrouter.ai/api/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        files={"file": ("voice.ogg", file_bytes)},
+        data={"model": "openai/whisper-1"}
+    )
+
+    return r.json().get("text", "")
+
 # === TELEGRAM ===
 @dp.message(lambda m: m.voice)
 async def voice_handler(message: types.Message):
@@ -102,25 +72,14 @@ async def voice_handler(message: types.Message):
     url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
     r = requests.get(url)
-    open("voice.ogg", "wb").write(r.content)
 
-    sound = AudioSegment.from_ogg("voice.ogg")
-    sound.export("voice.wav", format="wav")
+    text = transcribe_voice(r.content)
 
-    wf = wave.open("voice.wav", "rb")
-    rec = KaldiRecognizer(model, wf.getframerate())
-
-    text = ""
-    while True:
-        d = wf.readframes(4000)
-        if not d:
-            break
-        if rec.AcceptWaveform(d):
-            text += js.loads(rec.Result()).get("text", "")
-
-    text += js.loads(rec.FinalResult()).get("text", "")
+    if not text:
+        text = "не удалось распознать"
 
     await message.answer(f"🎙 {text}")
+
     reply = ask_ai(str(message.from_user.id), text)
     await message.answer(reply)
 
@@ -129,24 +88,63 @@ async def handle(message: types.Message):
     uid = str(message.from_user.id)
     text = message.text
 
+    # сохранение фактов
+    if text.lower().startswith("я "):
+        data.setdefault("profile", {}).setdefault(uid, []).append(text)
+        save("profile", data["profile"])
+        await message.answer("Запомнил")
+        return
+
+    if text.lower().startswith("цель"):
+        data.setdefault("goals", {}).setdefault(uid, []).append(text)
+        save("goals", data["goals"])
+        await message.answer("Цель добавлена")
+        return
+
     reply = ask_ai(uid, text)
     await message.answer(reply)
 
 # === WEB ===
 @app.route("/")
 def index():
-    return open("index.html").read()
+    return """
+    <html>
+    <body>
+    <h2>AI Assistant</h2>
+    <div id='chat'></div>
+    <input id='input'/>
+    <button onclick='send()'>Send</button>
+
+    <script>
+    async function send(){
+        let input = document.getElementById("input")
+        let text = input.value
+
+        document.getElementById("chat").innerHTML += "<p>Ты: "+text+"</p>"
+
+        let res = await fetch("/chat", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({message: text})
+        })
+
+        let data = await res.json()
+
+        document.getElementById("chat").innerHTML += "<p>Бот: "+data.reply+"</p>"
+        input.value = ""
+    }
+    </script>
+    </body>
+    </html>
+    """
 
 @app.route("/chat", methods=["POST"])
 def chat():
     text = request.json["message"]
-    uid = "web-user"
-
-    reply = ask_ai(uid, text)
-
+    reply = ask_ai("web-user", text)
     return jsonify({"reply": reply})
 
-# === RUN BOTH ===
+# === RUN ===
 async def run_bot():
     await dp.start_polling(bot)
 
