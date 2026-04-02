@@ -2,3 +2,4 @@ aiogram
 requests
 vosk
 pydub
+flask
