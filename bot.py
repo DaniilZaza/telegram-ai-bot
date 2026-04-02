@@ -1,4 +1,4 @@
-import os, json, requests, asyncio
+import os, json, requests, asyncio, random
 from aiogram import Bot, Dispatcher, types
 
 # --- CONFIG ---
@@ -27,6 +27,10 @@ def save(name, data):
 
 data = {k: load(k) for k in FILES}
 
+# --- RESERVE RESPONSES ---
+with open("responses.json","r",encoding="utf-8") as f:
+    reserve_responses = json.load(f)["default"]
+
 SYSTEM = {"role": "system", "content": """
 Ты — личный ассистент, коуч и система мышления.
 Ты анализируешь пользователя, помогаешь достигать целей, выявляешь слабости, усиливаешь дисциплину.
@@ -44,23 +48,24 @@ def build_context(uid):
 
 def search_memory(uid, text):
     memories = data["thoughts"].get(uid, [])
-    relevant = [m for m in memories if any(w in m for w in text.split())]
-    return relevant[:5]
+    return [m for m in memories if any(w in m for w in text.split())][:5]
 
 def ask_ai(uid, prompt):
     data["memory"].setdefault(uid, [])
-    messages = [SYSTEM] + data["memory"][uid][-6:] + [{"role": "user", "content": prompt}]
+    messages = [SYSTEM] + data["memory"][uid][-6:] + [{"role":"user","content":prompt}]
     try:
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {API_KEY}"},
-            json={"model": "openai/gpt-4o-mini", "messages": messages}
+            json={"model":"openai/gpt-4o-mini","messages":messages},
+            timeout=10
         )
         reply = r.json()["choices"][0]["message"]["content"]
     except:
-        reply = "Ошибка AI (проверь API ключ или лимиты)"
-    data["memory"][uid].append({"role": "user", "content": prompt})
-    data["memory"][uid].append({"role": "assistant", "content": reply})
+        # Если API недоступен, выбираем случайный резервный ответ
+        reply = random.choice(reserve_responses)
+    data["memory"][uid].append({"role":"user","content":prompt})
+    data["memory"][uid].append({"role":"assistant","content":reply})
     save("memory", data["memory"])
     return reply
 
@@ -70,53 +75,52 @@ async def handle(message: types.Message):
     uid = str(message.from_user.id)
     text = message.text.lower()
 
-    # создаём структуру, если нет
     for k in data:
-        data.setdefault(k, {})
-        data[k].setdefault(uid, [])
+        data.setdefault(k,{})
+        data[k].setdefault(uid,[])
 
-    # профиль
+    # Профиль
     if text.startswith("я "):
         data["profile"][uid].append(text)
-        save("profile", data["profile"])
+        save("profile",data["profile"])
         await message.answer("Запомнил профиль ✅")
         return
 
-    # мысль
+    # Мысль
     if text.startswith("мысль"):
         thought = text.replace("мысль","").strip()
         data["thoughts"][uid].append(thought)
-        save("thoughts", data["thoughts"])
+        save("thoughts",data["thoughts"])
         await message.answer("Сохранил мысль 📝")
         return
 
-    # цель
+    # Цель
     if text.startswith("цель"):
         goal = text.replace("цель","").strip()
         data["goals"][uid].append(goal)
-        save("goals", data["goals"])
+        save("goals",data["goals"])
         await message.answer("Цель добавлена 🎯")
         return
 
-    # привычка
+    # Привычка
     if text.startswith("привычка"):
         habit = text.replace("привычка","").strip()
         data["habits"][uid].append(habit)
-        save("habits", data["habits"])
+        save("habits",data["habits"])
         await message.answer("Привычка добавлена 💪")
         return
 
-    # задача
+    # Задача
     if text.startswith("задача"):
         task = text.replace("задача","").strip()
-        data["tasks"][uid].append({"text": task, "done": False})
-        save("tasks", data["tasks"])
+        data["tasks"][uid].append({"text":task,"done":False})
+        save("tasks",data["tasks"])
         await message.answer("Задача добавлена ✅")
         return
 
-    # разбор
+    # Разбор
     if "разбор" in text:
-        relevant = search_memory(uid, text)
+        relevant = search_memory(uid,text)
         prompt = f"""
 Контекст:
 {build_context(uid)}
@@ -141,7 +145,7 @@ async def handle(message: types.Message):
 {text}
 """
 
-    reply = ask_ai(uid, prompt)
+    reply = ask_ai(uid,prompt)
     await message.answer(reply)
 
 # --- RUN ---
