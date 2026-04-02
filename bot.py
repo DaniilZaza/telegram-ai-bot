@@ -2,9 +2,6 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from flask import Flask, request, jsonify, render_template
 import os, requests, json
-import soundfile as sf
-from vosk import Model, KaldiRecognizer
-import numpy as np
 
 # === CONFIG ===
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -13,20 +10,6 @@ API_KEY = os.getenv("OPENROUTER_API_KEY")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = Flask(__name__)
-
-# === MODEL ===
-if not os.path.exists("model"):
-    import zipfile
-    print("Downloading Vosk...")
-    url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
-    r = requests.get(url)
-    open("model.zip","wb").write(r.content)
-    zipfile.ZipFile("model.zip").extractall()
-    for f in os.listdir():
-        if f.startswith("vosk-model"):
-            os.rename(f,"model")
-
-model = Model("model")
 
 # === MEMORY ===
 memory = {}
@@ -45,7 +28,7 @@ def ask_ai(uid, text):
         )
         reply = r.json()["choices"][0]["message"]["content"]
     except:
-        reply = "Ошибка AI (лимит или API)"
+        reply = "Ошибка AI (проверь API ключ или лимиты)"
 
     memory[uid].append({"role":"user","content":text})
     memory[uid].append({"role":"assistant","content":reply})
@@ -69,35 +52,6 @@ def chat():
     text = request.json["message"]
     reply = ask_ai("web", text)
     return jsonify({"reply": reply})
-
-@app.route("/voice", methods=["POST"])
-def voice():
-    file = request.files.get("file")
-    if not file:
-        return jsonify({"text":"","reply":"нет файла"})
-
-    file.save("voice.ogg")
-
-    # распознавание
-    data_audio, samplerate = sf.read("voice.ogg", dtype="float32")
-    rec = KaldiRecognizer(model, samplerate)
-
-    text = ""
-    for i in range(0, len(data_audio), 4000):
-        chunk = data_audio[i:i+4000]
-        chunk_bytes = (chunk * 32767).astype("int16").tobytes()
-
-        if rec.AcceptWaveform(chunk_bytes):
-            text += json.loads(rec.Result()).get("text","")
-
-    text += json.loads(rec.FinalResult()).get("text","")
-
-    if not text:
-        text = "не удалось распознать"
-
-    reply = ask_ai("web", text)
-
-    return jsonify({"text": text, "reply": reply})
 
 # === RUN ===
 async def run_bot():
