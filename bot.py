@@ -1,7 +1,25 @@
 import os
 
 if not os.path.exists("model"):
-    os.system("wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip")
+    import os
+import requests
+import zipfile
+
+if not os.path.exists("model"):
+    print("Downloading Vosk model...")
+
+    url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
+    r = requests.get(url)
+
+    with open("model.zip", "wb") as f:
+        f.write(r.content)
+
+    with zipfile.ZipFile("model.zip", 'r') as zip_ref:
+        zip_ref.extractall()
+
+    os.rename("vosk-model-small-ru-0.22", "model")
+
+    print("Model ready")
     os.system("unzip vosk-model-small-ru-0.22.zip")
     os.system("mv vosk-model-small-ru-0.22 model")
 import asyncio
