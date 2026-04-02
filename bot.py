@@ -1,3 +1,9 @@
+import os
+
+if not os.path.exists("model"):
+    os.system("wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip")
+    os.system("unzip vosk-model-small-ru-0.22.zip")
+    os.system("mv vosk-model-small-ru-0.22 model")
 import asyncio
 from aiogram import Bot, Dispatcher, types
 import os, requests, json
