@@ -1,7 +1,8 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from flask import Flask, request, jsonify
-import os, requests, json, wave
+import os, requests, json
+import soundfile as sf
 from vosk import Model, KaldiRecognizer
 
 # === CONFIG ===
@@ -12,110 +13,124 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = Flask(__name__)
 
-# === VOSK MODEL ===
+# === MODEL DOWNLOAD ===
 if not os.path.exists("model"):
     import zipfile
-    import requests
-    print("Downloading Vosk model...")
+    print("Downloading Vosk...")
     url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
     r = requests.get(url)
-    with open("model.zip", "wb") as f:
-        f.write(r.content)
-    with zipfile.ZipFile("model.zip", "r") as zip_ref:
-        zip_ref.extractall()
-    for name in os.listdir():
-        if name.startswith("vosk-model"):
-            os.rename(name, "model")
-print("Vosk model ready")
+    open("model.zip","wb").write(r.content)
+    zipfile.ZipFile("model.zip").extractall()
+    for f in os.listdir():
+        if f.startswith("vosk-model"):
+            os.rename(f,"model")
+
 model = Model("model")
 
 # === STORAGE ===
-FILES = ["memory", "profile", "goals", "thoughts"]
+FILES = ["memory"]
 def load(name): return json.load(open(f"{name}.json")) if os.path.exists(f"{name}.json") else {}
-def save(name, data): json.dump(data, open(f"{name}.json", "w"))
+def save(name,data): json.dump(data, open(f"{name}.json","w"))
+
 data = {k: load(k) for k in FILES}
 
-SYSTEM = {"role": "system", "content": "Ты умный ассистент, отвечай понятно, без лишнего"}
+SYSTEM = {"role":"system","content":"Ты умный ассистент"}
 
-def get_context(uid):
-    return f"Профиль: {data['profile'].get(uid, [])[:3]}\nЦели: {data['goals'].get(uid, [])[:3]}"
-
-def ask_ai(uid, text):
-    data.setdefault("memory", {}).setdefault(uid, [])
-    messages = [SYSTEM] + data["memory"][uid][-6:] + [{"role":"user","content":text}]
+# === AI ===
+def ask_ai(uid,text):
+    data.setdefault("memory",{}).setdefault(uid,[])
+    messages=[SYSTEM]+data["memory"][uid][-6:]+[{"role":"user","content":text}]
     try:
-        r = requests.post(
+        r=requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {API_KEY}"},
+            headers={"Authorization":f"Bearer {API_KEY}"},
             json={"model":"openai/gpt-4o-mini","messages":messages}
         )
-        reply = r.json()["choices"][0]["message"]["content"]
+        reply=r.json()["choices"][0]["message"]["content"]
     except:
-        reply = "Ошибка API или превышен лимит"
+        reply="Ошибка API"
     data["memory"][uid].append({"role":"user","content":text})
     data["memory"][uid].append({"role":"assistant","content":reply})
-    data["memory"][uid] = data["memory"][uid][-10:]
-    save("memory", data["memory"])
+    data["memory"][uid]=data["memory"][uid][-10:]
+    save("memory",data["memory"])
     return reply
 
-# === VOICE HANDLER ===
+# === VOICE БЕЗ FFMPEG ===
 @dp.message(lambda m: m.voice)
 async def voice_handler(message: types.Message):
-    file = await bot.get_file(message.voice.file_id)
-    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
-    r = requests.get(url)
-    with open("voice.ogg", "wb") as f:
-        f.write(r.content)
-    # конвертируем ogg в wav с помощью vosk-recognizer
-    import subprocess
-    subprocess.run(f"ffmpeg -i voice.ogg -ar 16000 -ac 1 voice.wav", shell=True)
-    wf = wave.open("voice.wav", "rb")
-    rec = KaldiRecognizer(model, wf.getframerate())
-    text = ""
-    while True:
-        data_chunk = wf.readframes(4000)
-        if len(data_chunk) == 0: break
-        if rec.AcceptWaveform(data_chunk):
-            text += json.loads(rec.Result()).get("text","")
-    text += json.loads(rec.FinalResult()).get("text","")
-    if not text: text = "не удалось распознать"
+    uid=str(message.from_user.id)
+
+    file=await bot.get_file(message.voice.file_id)
+    url=f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
+    r=requests.get(url)
+    open("voice.ogg","wb").write(r.content)
+
+    # 🔥 ЧИТАЕМ OGG НАПРЯМУЮ
+    data_audio, samplerate = sf.read("voice.ogg")
+
+    rec = KaldiRecognizer(model, samplerate)
+
+    text=""
+    import numpy as np
+
+    for i in range(0,len(data_audio),4000):
+        chunk=data_audio[i:i+4000]
+        chunk_bytes=(chunk*32767).astype("int16").tobytes()
+
+        if rec.AcceptWaveform(chunk_bytes):
+            text+=json.loads(rec.Result()).get("text","")
+
+    text+=json.loads(rec.FinalResult()).get("text","")
+
+    if not text:
+        text="не удалось распознать"
+
     await message.answer(f"🎙 {text}")
-    reply = ask_ai(str(message.from_user.id), text)
+
+    reply=ask_ai(uid,text)
     await message.answer(reply)
 
-# === TEXT HANDLER ===
+# === TEXT ===
 @dp.message()
 async def handle(message: types.Message):
-    uid = str(message.from_user.id)
-    text = message.text
-    if text.lower().startswith("я "):
-        data.setdefault("profile", {}).setdefault(uid, []).append(text)
-        save("profile", data["profile"])
-        await message.answer("Запомнил")
-        return
-    if text.lower().startswith("цель"):
-        data.setdefault("goals", {}).setdefault(uid, []).append(text)
-        save("goals", data["goals"])
-        await message.answer("Цель добавлена")
-        return
-    reply = ask_ai(uid, text)
+    uid=str(message.from_user.id)
+    reply=ask_ai(uid,message.text)
     await message.answer(reply)
 
 # === WEB ===
 @app.route("/")
 def index():
-    return open("index.html").read()
+    return """
+    <html><body>
+    <h2>AI</h2>
+    <input id='i'><button onclick='s()'>Send</button>
+    <div id='c'></div>
+    <script>
+    async function s(){
+        let t=i.value
+        c.innerHTML+="<p>"+t+"</p>"
+        let r=await fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:t})})
+        let d=await r.json()
+        c.innerHTML+="<p>"+d.reply+"</p>"
+    }
+    </script>
+    </body></html>
+    """
 
-@app.route("/chat", methods=["POST"])
+@app.route("/chat",methods=["POST"])
 def chat():
-    text = request.json["message"]
-    reply = ask_ai("web-user", text)
-    return jsonify({"reply": reply})
+    text=request.json["message"]
+    return jsonify({"reply":ask_ai("web",text)})
 
-# === RUN BOTH ===
-async def run_bot(): await dp.start_polling(bot)
-def run_web(): app.run(host="0.0.0.0", port=3000)
-if __name__ == "__main__":
+# === RUN ===
+async def run_bot():
+    await dp.start_polling(bot)
+
+def run_web():
+    app.run(host="0.0.0.0",port=3000)
+
+if __name__=="__main__":
     import threading
     threading.Thread(target=run_web).start()
     asyncio.run(run_bot())
