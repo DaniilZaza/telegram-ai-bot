@@ -134,3 +134,31 @@ if __name__=="__main__":
     import threading
     threading.Thread(target=run_web).start()
     asyncio.run(run_bot())
+from flask import request, jsonify
+
+@app.route("/voice", methods=["POST"])
+def voice():
+    uid = "web-user"
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"text":"","reply":"Ошибка: нет файла"})
+    file.save("voice.ogg")
+
+    # Оффлайн распознавание через Vosk
+    import soundfile as sf
+    data_audio, samplerate = sf.read("voice.ogg", dtype="float32")
+
+    from vosk import KaldiRecognizer
+    import json, numpy as np
+    rec = KaldiRecognizer(model, samplerate)
+    text=""
+    for i in range(0,len(data_audio),4000):
+        chunk=data_audio[i:i+4000]
+        chunk_bytes=(chunk*32767).astype("int16").tobytes()
+        if rec.AcceptWaveform(chunk_bytes):
+            text+=json.loads(rec.Result()).get("text","")
+    text+=json.loads(rec.FinalResult()).get("text","")
+    if not text: text="не удалось распознать"
+
+    reply = ask_ai(uid, text)
+    return jsonify({"text":text,"reply":reply})
