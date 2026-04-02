@@ -1,14 +1,21 @@
 import os, json, requests
 from flask import Flask, request, jsonify, render_template
+from aiogram import Bot, Dispatcher, types
+import asyncio
+import threading
 
-app = Flask(__name__)
+# --- CONFIG ---
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Память чата
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+app = Flask(__name__)
+
+# --- MEMORY ---
 memory = {}
 SYSTEM = {"role": "system", "content": "Ты умный ассистент"}
 
-# Функция запроса к AI
 def ask_ai(uid, text):
     memory.setdefault(uid, [])
     messages = [SYSTEM] + memory[uid][-6:] + [{"role": "user", "content": text}]
@@ -22,11 +29,18 @@ def ask_ai(uid, text):
     except:
         reply = "Ошибка AI (проверь API ключ или лимиты)"
 
-    memory[uid].append({"role": "user", "content": text})
-    memory[uid].append({"role": "assistant", "content": reply})
+    memory[uid].append({"role":"user","content":text})
+    memory[uid].append({"role":"assistant","content":reply})
     return reply
 
-# === WEB ===
+# --- TELEGRAM HANDLER ---
+@dp.message()
+async def tg_handler(message: types.Message):
+    uid = str(message.from_user.id)
+    reply = ask_ai(uid, message.text)
+    await message.answer(reply)
+
+# --- WEB ---
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -39,10 +53,18 @@ def chat():
 
 @app.route("/voice", methods=["POST"])
 def voice():
-    # Голос временно отключен
+    # Голос временно отключён
     return jsonify({"text": "", "reply": "Голос временно отключен"})
 
-# === RUN ===
-if __name__ == "__main__":
+# --- RUN ---
+async def run_bot():
+    await dp.start_polling(bot)
+
+def run_web():
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    # запускаем Flask и Telegram бота параллельно
+    threading.Thread(target=run_web).start()
+    asyncio.run(run_bot())
