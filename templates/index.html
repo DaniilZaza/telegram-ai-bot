@@ -5,38 +5,56 @@
 <title>AI Assistant</title>
 <style>
 body { font-family: Arial; max-width:600px; margin:auto; padding:20px; background:#fafafa; }
-.chat { height:400px; overflow:auto; border:1px solid #ddd; padding:10px; border-radius:10px; background:white;}
-.msg { margin:10px; padding:8px; border-radius:10px;}
-.user { background:#cce5ff; text-align:right;}
-.bot { background:#eee;}
+.chat { height:400px; overflow:auto; border:1px solid #ddd; padding:10px; border-radius:10px; background:white; display:flex; flex-direction:column; }
+.msg { margin:10px; padding:8px; border-radius:10px; max-width:80%; word-wrap:break-word; }
+.user { background:#cce5ff; align-self:flex-end; }
+.bot { background:#eee; align-self:flex-start; }
+#inputRow { display:flex; margin-top:10px; }
+#inputField { flex:1; padding:10px; font-size:16px; border:1px solid #ddd; border-radius:8px; }
+#sendButton { padding:10px 15px; margin-left:10px; font-size:16px; cursor:pointer; border:none; background:#007bff; color:white; border-radius:8px; }
+#voiceButton { padding:10px 15px; margin-left:10px; font-size:16px; cursor:pointer; border:none; background:#28a745; color:white; border-radius:8px; }
 </style>
 </head>
 <body>
 
 <h2>🤖 AI Assistant</h2>
-
 <div id="chat" class="chat"></div>
 
-<input id="input" placeholder="Напиши..." />
-<button onclick="send()">Отправить</button>
+<div id="inputRow">
+<input id="inputField" placeholder="Напиши сообщение..." />
+<button id="sendButton">Отправить</button>
+<button id="voiceButton">🎙</button>
+</div>
 
 <script>
-async function send(){
-    let text = input.value
-    if(!text) return
+const chat = document.getElementById("chat");
+const input = document.getElementById("inputField");
+const sendBtn = document.getElementById("sendButton");
+const voiceBtn = document.getElementById("voiceButton");
 
-    chat.innerHTML += `<div class="msg user">${text}</div>`
+function addMessage(text, type){
+    const div = document.createElement("div");
+    div.className = "msg " + type;
+    div.textContent = text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+}
 
-    let res = await fetch("/chat", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:text})
-    })
+async function sendMessage(){
+    const text = input.value.trim();
+    if(!text) return;
+    addMessage(text,"user");
+    input.value = "";
+    const res = await fetch("/chat", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
+    const data = await res.json();
+    addMessage(data.reply,"bot");
+}
 
-    let data = await res.json()
-    chat.innerHTML += `<div class="msg bot">${data.reply}</div>`
+sendBtn.onclick = sendMessage;
+input.onkeydown = e => { if(e.key==="Enter") sendMessage(); }
 
-    input.value=""
+voiceBtn.onclick = async () => {
+    addMessage("🎙 Голос временно отключен","bot");
 }
 </script>
 
