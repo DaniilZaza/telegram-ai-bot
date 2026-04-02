@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>AI Assistant</title>
+<style>
+body { font-family: Arial; max-width:600px; margin:auto; padding:20px; background:#fafafa; }
+.chat { height:400px; overflow:auto; border:1px solid #ddd; padding:10px; border-radius:10px; background:white;}
+.msg { margin:10px; padding:8px; border-radius:10px;}
+.user { background:#cce5ff; text-align:right;}
+.bot { background:#eee;}
+</style>
+</head>
+<body>
+
+<h2>🤖 AI Assistant</h2>
+
+<div id="chat" class="chat"></div>
+
+<input id="input" placeholder="Напиши..." />
+<button onclick="send()">Отправить</button>
+<button onclick="voice()">🎙</button>
+
+<script>
+async function send(){
+    let text = input.value
+    chat.innerHTML += `<div class="msg user">${text}</div>`
+
+    let res = await fetch("/chat", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:text})
+    })
+
+    let data = await res.json()
+    chat.innerHTML += `<div class="msg bot">${data.reply}</div>`
+    input.value=""
+}
+
+let recorder, chunks=[]
+
+async function voice(){
+    let stream = await navigator.mediaDevices.getUserMedia({audio:true})
+    recorder = new MediaRecorder(stream)
+
+    recorder.ondataavailable = e => chunks.push(e.data)
+
+    recorder.onstop = async ()=>{
+        let blob = new Blob(chunks,{type:"audio/ogg"})
+        chunks=[]
+
+        let form = new FormData()
+        form.append("file", blob, "voice.ogg")
+
+        let res = await fetch("/voice",{method:"POST",body:form})
+        let data = await res.json()
+
+        chat.innerHTML += `<div class="msg user">${data.text}</div>`
+        chat.innerHTML += `<div class="msg bot">${data.reply}</div>`
+    }
+
+    recorder.start()
+    setTimeout(()=>recorder.stop(),3000)
+}
+</script>
+
+</body>
+</html>
