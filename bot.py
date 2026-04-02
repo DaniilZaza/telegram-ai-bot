@@ -1,7 +1,4 @@
 import os
-
-if not os.path.exists("model"):
-    import os
 import requests
 import zipfile
 
@@ -14,18 +11,17 @@ if not os.path.exists("model"):
     with open("model.zip", "wb") as f:
         f.write(r.content)
 
+    print("Extracting...")
+
     with zipfile.ZipFile("model.zip", 'r') as zip_ref:
         zip_ref.extractall()
 
-    os.rename("vosk-model-small-ru-0.22", "model")
+    # Переименовываем папку
+    for name in os.listdir():
+        if name.startswith("vosk-model"):
+            os.rename(name, "model")
 
     print("Model ready")
-    os.system("unzip vosk-model-small-ru-0.22.zip")
-    os.system("mv vosk-model-small-ru-0.22 model")
-import asyncio
-from aiogram import Bot, Dispatcher, types
-import os, requests, json
-
 bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
 dp = Dispatcher()
 
