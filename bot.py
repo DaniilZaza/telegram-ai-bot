@@ -1,14 +1,14 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from openai import OpenAI
 import os
+import requests
 
 bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
 dp = Dispatcher()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 user_history = {}
+
+API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -20,12 +20,19 @@ async def handle_message(message: types.Message):
 
     user_history[user_id].append({"role": "user", "content": text})
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=user_history[user_id]
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "openai/gpt-3.5-turbo",
+            "messages": user_history[user_id]
+        }
     )
 
-    reply = response.choices[0].message.content
+    reply = response.json()["choices"][0]["message"]["content"]
 
     user_history[user_id].append({"role": "assistant", "content": reply})
 
