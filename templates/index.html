@@ -19,11 +19,12 @@ body { font-family: Arial; max-width:600px; margin:auto; padding:20px; backgroun
 
 <input id="input" placeholder="Напиши..." />
 <button onclick="send()">Отправить</button>
-<button onclick="voice()">🎙</button>
 
 <script>
 async function send(){
     let text = input.value
+    if(!text) return
+
     chat.innerHTML += `<div class="msg user">${text}</div>`
 
     let res = await fetch("/chat", {
@@ -34,33 +35,8 @@ async function send(){
 
     let data = await res.json()
     chat.innerHTML += `<div class="msg bot">${data.reply}</div>`
+
     input.value=""
-}
-
-let recorder, chunks=[]
-
-async function voice(){
-    let stream = await navigator.mediaDevices.getUserMedia({audio:true})
-    recorder = new MediaRecorder(stream)
-
-    recorder.ondataavailable = e => chunks.push(e.data)
-
-    recorder.onstop = async ()=>{
-        let blob = new Blob(chunks,{type:"audio/ogg"})
-        chunks=[]
-
-        let form = new FormData()
-        form.append("file", blob, "voice.ogg")
-
-        let res = await fetch("/voice",{method:"POST",body:form})
-        let data = await res.json()
-
-        chat.innerHTML += `<div class="msg user">${data.text}</div>`
-        chat.innerHTML += `<div class="msg bot">${data.reply}</div>`
-    }
-
-    recorder.start()
-    setTimeout(()=>recorder.stop(),3000)
 }
 </script>
 
