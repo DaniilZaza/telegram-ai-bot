@@ -13,45 +13,47 @@ app = Flask(__name__)
 
 # === MEMORY ===
 memory = {}
-
-SYSTEM = {"role":"system","content":"Ты умный ассистент"}
+SYSTEM = {"role": "system", "content": "Ты умный ассистент"}
 
 def ask_ai(uid, text):
     memory.setdefault(uid, [])
-    messages = [SYSTEM] + memory[uid][-6:] + [{"role":"user","content":text}]
-
+    messages = [SYSTEM] + memory[uid][-6:] + [{"role": "user", "content": text}]
     try:
         r = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization":f"Bearer {API_KEY}"},
-            json={"model":"openai/gpt-4o-mini","messages":messages}
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            json={"model": "openai/gpt-4o-mini", "messages": messages}
         )
         reply = r.json()["choices"][0]["message"]["content"]
     except:
         reply = "Ошибка AI (проверь API ключ или лимиты)"
 
-    memory[uid].append({"role":"user","content":text})
-    memory[uid].append({"role":"assistant","content":reply})
-
+    memory[uid].append({"role": "user", "content": text})
+    memory[uid].append({"role": "assistant", "content": reply})
     return reply
 
-# === TELEGRAM ===
+# === TELEGRAM HANDLER ===
 @dp.message()
 async def tg_handler(message: types.Message):
     uid = str(message.from_user.id)
     reply = ask_ai(uid, message.text)
     await message.answer(reply)
 
-# === WEB ===
+# === WEB ROUTES ===
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    text = request.json["message"]
+    text = request.json.get("message", "")
     reply = ask_ai("web", text)
     return jsonify({"reply": reply})
+
+@app.route("/voice", methods=["POST"])
+def voice():
+    # Голос временно отключен, чтобы сайт сразу работал
+    return jsonify({"text": "", "reply": "Голос временно отключен"})
 
 # === RUN ===
 async def run_bot():
