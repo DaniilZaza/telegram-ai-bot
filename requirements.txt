@@ -1,6 +1,6 @@
 aiogram
 requests
-vosk
 flask
+vosk
 soundfile
 numpy
