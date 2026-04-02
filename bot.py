@@ -1,78 +1,127 @@
-import os
-import requests
-import zipfile
+import asyncio
+from aiogram import Bot, Dispatcher, types
+import os, requests, json, zipfile
 
+# === CONFIG ===
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# === DOWNLOAD MODEL ===
 if not os.path.exists("model"):
-    print("Downloading Vosk model...")
-
+    print("Downloading model...")
     url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
     r = requests.get(url)
 
     with open("model.zip", "wb") as f:
         f.write(r.content)
 
-    print("Extracting...")
-
     with zipfile.ZipFile("model.zip", 'r') as zip_ref:
         zip_ref.extractall()
 
-    # Переименовываем папку
     for name in os.listdir():
         if name.startswith("vosk-model"):
             os.rename(name, "model")
 
-    print("Model ready")
-bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
-dp = Dispatcher()
+# === VOSK ===
+from vosk import Model, KaldiRecognizer
+import wave
+import json as js
+from pydub import AudioSegment
 
-API_KEY = os.getenv("OPENROUTER_API_KEY")
+model = Model("model")
 
-FILES = {
-    "memory": "memory.json",
-    "profile": "profile.json",
-    "goals": "goals.json",
-    "thoughts": "thoughts.json"
-}
+# === STORAGE ===
+FILES = ["memory", "profile", "goals", "thoughts"]
 
 def load(name):
-    f = FILES[name]
-    return json.load(open(f)) if os.path.exists(f) else {}
+    return json.load(open(f"{name}.json")) if os.path.exists(f"{name}.json") else {}
 
 def save(name, data):
-    json.dump(data, open(FILES[name], "w"))
+    json.dump(data, open(f"{name}.json", "w"))
 
 data = {k: load(k) for k in FILES}
 
+# === SYSTEM ===
 SYSTEM = {
     "role": "system",
     "content": """
-Ты — умный, спокойный и полезный ассистент.
+Ты — умный ассистент уровня ChatGPT.
 
 Правила:
-- отвечай естественно, как человек
-- не переспрашивай без причины
-- не усложняй
-- если вопрос простой — отвечай просто
-- если сложный — объясняй структурно
+- не тупи
+- не переспрашивай
+- понимай контекст
+- говори естественно
+- помогай думать
 """
 }
 
-def build_context(uid):
+# === SMART MEMORY ===
+def get_relevant(uid, text):
+    thoughts = data["thoughts"].get(uid, [])
+    return [t for t in thoughts if any(w in t for w in text.split())][:3]
+
+def get_context(uid):
     return f"""
 Профиль: {data['profile'].get(uid, [])[:3]}
 Цели: {data['goals'].get(uid, [])[:3]}
 """
 
+# === VOICE ===
+@dp.message(lambda m: m.voice)
+async def voice_handler(message: types.Message):
+    file = await bot.get_file(message.voice.file_id)
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
+    r = requests.get(url)
+    open("voice.ogg", "wb").write(r.content)
+
+    sound = AudioSegment.from_ogg("voice.ogg")
+    sound.export("voice.wav", format="wav")
+
+    wf = wave.open("voice.wav", "rb")
+    rec = KaldiRecognizer(model, wf.getframerate())
+
+    text = ""
+    while True:
+        data_chunk = wf.readframes(4000)
+        if not data_chunk:
+            break
+        if rec.AcceptWaveform(data_chunk):
+            text += js.loads(rec.Result()).get("text", "")
+
+    text += js.loads(rec.FinalResult()).get("text", "")
+
+    if not text:
+        text = "не удалось распознать"
+
+    await message.answer(f"🎙 {text}")
+
+    fake = types.Message(
+        message_id=message.message_id,
+        date=message.date,
+        chat=message.chat,
+        from_user=message.from_user,
+        text=text
+    )
+
+    await handle(fake)
+
+# === MAIN ===
 @dp.message()
 async def handle(message: types.Message):
     uid = str(message.from_user.id)
     text = message.text
 
     for k in data:
-        if uid not in data[k]:
-            data[k][uid] = []
+        data[k].setdefault(uid, [])
 
-    # сохраняем факты
+    data.setdefault("memory", {}).setdefault(uid, [])
+
+    # === SAVE FACTS ===
     if text.lower().startswith("я "):
         data["profile"][uid].append(text)
         save("profile", data["profile"])
@@ -91,24 +140,56 @@ async def handle(message: types.Message):
         await message.answer("Сохранил")
         return
 
-    # память диалога
-    if uid not in data["memory"]:
-        data["memory"][uid] = []
+    relevant = get_relevant(uid, text)
 
-    messages = [SYSTEM]
+    # === THINKING ===
+    analysis = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        json={
+            "model": "openai/gpt-4o-mini",
+            "messages": [{
+                "role": "user",
+                "content": f"""
+Контекст:
+{get_context(uid)}
 
-    # добавляем контекст как system
-    context = build_context(uid)
-    messages.append({"role": "system", "content": f"Контекст:\n{context}"})
+Мысли:
+{relevant}
 
-    # добавляем последние сообщения
+Сообщение:
+{text}
+
+Кратко:
+1. Смысл
+2. Что ответить
+"""
+            }]
+        }
+    )
+
+    plan = analysis.json()["choices"][0]["message"]["content"]
+
+    # === RESPONSE ===
+    messages = [
+        SYSTEM,
+        {"role": "system", "content": f"Контекст:\n{get_context(uid)}"},
+    ]
+
     messages += data["memory"][uid][-6:]
 
-    # новое сообщение
-    messages.append({"role": "user", "content": text})
+    messages.append({
+        "role": "user",
+        "content": f"""
+Анализ:
+{plan}
 
-    # запрос
-    response = requests.post(
+Ответь:
+{text}
+"""
+    })
+
+    res = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {API_KEY}"},
         json={
@@ -117,18 +198,17 @@ async def handle(message: types.Message):
         }
     )
 
-    reply = response.json()["choices"][0]["message"]["content"]
+    reply = res.json()["choices"][0]["message"]["content"]
 
-    # сохраняем историю
     data["memory"][uid].append({"role": "user", "content": text})
     data["memory"][uid].append({"role": "assistant", "content": reply})
-
     data["memory"][uid] = data["memory"][uid][-10:]
 
     save("memory", data["memory"])
 
     await message.answer(reply)
 
+# === RUN ===
 async def main():
     await dp.start_polling(bot)
 
